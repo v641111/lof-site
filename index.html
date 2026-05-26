@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LOF基金溢价套利 — ZX Capital</title>
+<meta name="description" content="实时监控A股LOF基金场内溢价率，按溢价降序排列，辅助套利决策。">
+<link rel="canonical" href="https://lof.zxcapitalgroup.com/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#06080d;--bg2:#080b12;--card:#0d1117;--bdr:#161d2a;--g:#00dc82;--gd:#00b36b;--r:#ff4d6a;--amb:#f0a050;--t:#e2e8f0;--tm:#94a3b8;--td:#64748b;--tb:#f1f5f9}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans','Noto Sans SC',system-ui,sans-serif;background:var(--bg);color:var(--t);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}.mono{font-family:'Space Mono','Courier New',monospace}
+.wrap{max-width:1280px;margin:0 auto;padding:0 20px}
+
+.nav{position:sticky;top:0;z-index:100;background:rgba(6,8,13,.94);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-bottom:1px solid var(--bdr)}
+.nav-in{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:1280px;margin:0 auto;padding:0 20px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;color:var(--tb)}
+.logo-i{width:34px;height:34px;border-radius:7px;background:linear-gradient(135deg,var(--g),var(--gd));display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--bg);font-family:'Space Mono',monospace}
+.nlinks{display:flex;gap:24px;align-items:center}.nlinks a{color:var(--tm);font-size:13px;font-weight:500;transition:color .2s}.nlinks a:hover{color:var(--g)}
+.nlinks .cur{color:var(--g);font-weight:700}
+.mbtn{display:none;background:none;border:none;color:var(--t);font-size:22px;cursor:pointer}
+.mmenu{display:none;background:var(--bg2);border-top:1px solid var(--bdr);padding:12px 20px}.mmenu a{display:block;padding:10px 0;color:var(--tm);font-size:14px}
+
+.page-hd{padding:36px 20px 24px;max-width:1280px;margin:0 auto}
+.page-title{font-size:26px;font-weight:700;margin-bottom:4px}
+.page-sub{color:var(--td);font-size:13px}
+
+.sbar{background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:14px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.mkt-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0}
+.dot-open{background:var(--g);box-shadow:0 0 7px var(--g);animation:pulse 2s infinite}
+.dot-pre{background:var(--amb)}
+.dot-cls{background:var(--td)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.mkt-label{font-size:13px;font-weight:600}
+.sbar-meta{margin-left:auto;display:flex;gap:18px;align-items:center;font-size:12px;color:var(--td)}
+.sbar-meta span b{font-family:'Space Mono',monospace;color:var(--tm)}
+
+.ctrl-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.ctrl-label{font-size:12px;color:var(--td);font-weight:500;white-space:nowrap}
+.ctrl-group{display:flex;align-items:center;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:3px;gap:2px}
+.cbtn{padding:5px 13px;border-radius:6px;border:none;background:transparent;color:var(--tm);font-size:12px;font-weight:600;cursor:pointer;font-family:'Space Mono',monospace;transition:all .15s;white-space:nowrap}
+.cbtn.on{background:var(--g);color:var(--bg)}
+.rbtn{padding:7px 16px;border-radius:7px;border:1px solid var(--bdr);background:transparent;color:var(--tm);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:5px}
+.rbtn:hover{border-color:var(--g);color:var(--g)}
+.rbtn .spin{display:inline-block;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.rbtn:not(.loading) .spin{animation:none}
+.err-bar{background:rgba(255,77,106,.08);border:1px solid rgba(255,77,106,.2);border-radius:8px;padding:9px 14px;font-size:12px;color:var(--r);display:none}
+
+.tw{overflow-x:auto;border-radius:12px;border:1px solid var(--bdr);margin-bottom:32px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--card);color:var(--td);font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.05em;padding:12px 14px;text-align:left;border-bottom:1px solid var(--bdr);white-space:nowrap;cursor:pointer;user-select:none;transition:color .15s}
+th:hover{color:var(--t)}th.srt{color:var(--g)}
+.sarr{margin-left:3px;font-size:9px;opacity:.5}
+th.srt .sarr{opacity:1}
+td{padding:12px 14px;border-bottom:1px solid rgba(22,29,42,.7);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(13,17,23,.6)}
+.tk{font-family:'Space Mono',monospace;font-size:11px;color:var(--g)}
+
+.p-hi{color:#00dc82;font-weight:700;font-family:'Space Mono',monospace}
+.p-md{color:#5ddba3;font-weight:700;font-family:'Space Mono',monospace}
+.p-lo{color:var(--tm);font-weight:600;font-family:'Space Mono',monospace}
+.p-neg{color:var(--r);font-weight:600;font-family:'Space Mono',monospace}
+.p-na{color:var(--td);font-family:'Space Mono',monospace}
+
+.badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;vertical-align:middle}
+.b-qdii{background:rgba(240,160,80,.12);color:var(--amb)}
+.b-open{background:rgba(0,220,130,.1);color:var(--g)}
+.b-cls{background:rgba(100,116,139,.1);color:var(--td)}
+
+.net-cell{display:flex;align-items:center;gap:8px}
+.bar-o{width:56px;height:5px;background:var(--bdr);border-radius:3px;overflow:hidden;flex-shrink:0}
+.bar-i{height:100%;border-radius:3px;transition:width .4s}
+
+.fee-detail{font-size:10px;margin-top:2px}
+
+.load-row td{text-align:center;padding:36px;color:var(--td)}
+.lspin{display:inline-block;width:16px;height:16px;border:2px solid var(--bdr);border-top-color:var(--g);border-radius:50%;animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px;margin-bottom:32px}
+.icard{background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:20px}
+.icard h3{font-size:14px;font-weight:700;margin-bottom:12px;color:var(--tb)}
+.icard p,.icard li{font-size:13px;color:var(--td);line-height:1.75}
+.icard ul{padding-left:16px}.icard li{margin-bottom:3px}
+.step{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start}
+.step-n{width:20px;height:20px;border-radius:50%;background:var(--g);color:var(--bg);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.step p{font-size:13px;color:var(--td);line-height:1.65}
+
+.disc{background:var(--card);border:1px solid #2a1c1c;border-radius:12px;padding:22px 26px;margin-bottom:40px}
+.disc h4{font-size:13px;font-weight:700;color:var(--amb);margin-bottom:8px}
+.disc p{font-size:12px;color:var(--td);line-height:1.7}
+
+footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--bg)}
+.fi{max-width:1280px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+.fc{color:var(--td);font-size:11px;line-height:1.6}
+
+@media(max-width:768px){
+  .nlinks{display:none!important}.mbtn{display:flex!important}.mmenu.open{display:block!important}
+  .sbar-meta{margin-left:0;width:100%;flex-wrap:wrap;gap:10px}
+  .bar-o{display:none}
+  th,td{padding:10px 10px;font-size:12px}
+  .page-title{font-size:22px}
+}
+@media(max-width:500px){.ctrl-row{gap:6px}}
+</style></head><body>
+
+<nav class="nav"><div class="nav-in">
+  <a href="https://zxcapitalgroup.com/" class="logo"><span class="logo-i">ZX</span>ZX Capital</a>
+  <div class="nlinks">
+    <a href="https://zxcapitalgroup.com/etf/">ETF</a>
+    <a href="https://zxcapitalgroup.com/stock/">Stocks</a>
+    <a href="https://zxcapitalgroup.com/crypto/">Crypto</a>
+    <a href="https://zxcapitalgroup.com/defi/">DeFi</a>
+    <a href="https://zxcapitalgroup.com/calculator/">Tools</a>
+    <span class="cur">LOF套利</span>
+  </div>
+  <button class="mbtn" onclick="document.getElementById('mm').classList.toggle('open')" aria-label="菜单">☰</button>
+</div>
+<div id="mm" class="mmenu">
+  <a href="https://zxcapitalgroup.com/etf/">ETF</a>
+  <a href="https://zxcapitalgroup.com/stock/">Stocks</a>
+  <a href="https://zxcapitalgroup.com/crypto/">Crypto</a>
+  <a href="https://zxcapitalgroup.com/defi/">DeFi</a>
+  <a href="https://zxcapitalgroup.com/calculator/">Tools</a>
+</div></nav>
+
+<div class="wrap">
+<div class="page-hd">
+  <h1 class="page-title">LOF基金溢价套利</h1>
+  <p class="page-sub">实时溢价率监控 · 仅显示可申购且日限额≥100元品种 · 交易时段每60秒自动刷新</p>
+</div>
+
+<!-- Status bar -->
+<div class="sbar">
+  <span class="mkt-dot" id="mktDot"></span>
+  <span class="mkt-label" id="mktLabel">--</span>
+  <div class="sbar-meta">
+    <span>数据时间：<b id="updTime">--</b></span>
+    <span>下次刷新：<b id="cdTimer">--</b></span>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="ctrl-row">
+  <span class="ctrl-label">申购费率折扣</span>
+  <div class="ctrl-group">
+    <button class="cbtn" id="fb0" onclick="setDiscount(0)">免申购费</button>
+    <button class="cbtn on"  id="fb1" onclick="setDiscount(0.1)">1折</button>
+    <button class="cbtn" id="fb2" onclick="setDiscount(1)">原费率</button>
+  </div>
+  <button class="rbtn" id="rfBtn" onclick="doRefresh()">
+    <span id="rfIcon">↻</span> 立即刷新
+  </button>
+  <span id="errBar" class="err-bar"></span>
+</div>
+
+<!-- Table -->
+<div class="tw"><table id="lofTbl">
+  <thead><tr>
+    <th onclick="sortBy('name')">基金<span class="sarr">↕</span></th>
+    <th onclick="sortBy('rt')" id="th_rt" class="srt">实时溢价率<span class="sarr" id="sa_rt">↓</span></th>
+    <th onclick="sortBy('t1')" id="th_t1">T-1溢价率<span class="sarr" id="sa_t1">↕</span></th>
+    <th onclick="sortBy('net')" id="th_net">套利净空间<span class="sarr" id="sa_net">↕</span></th>
+    <th onclick="sortBy('price')" id="th_price">实时场内价<span class="sarr" id="sa_price">↕</span></th>
+    <th onclick="sortBy('estnav')" id="th_estnav">估算净值<span class="sarr" id="sa_estnav">↕</span></th>
+    <th onclick="sortBy('t1nav')" id="th_t1nav">T-1净值<span class="sarr" id="sa_t1nav">↕</span></th>
+    <th>申购费率</th>
+    <th>转托管</th>
+    <th>状态</th>
+  </tr></thead>
+  <tbody id="tbody">
+    <tr class="load-row"><td colspan="10"><span class="lspin"></span>正在加载行情数据…</td></tr>
+  </tbody>
+</table></div>
+
+<!-- Info cards -->
+<div class="cards">
+  <div class="icard">
+    <h3>溢价套利流程</h3>
+    <div class="step"><div class="step-n">1</div><p>在场外（天天基金/支付宝等）按当日净值申购LOF份额</p></div>
+    <div class="step"><div class="step-n">2</div><p>等待转托管至场内交易所（通常T+3～T+7交易日）</p></div>
+    <div class="step"><div class="step-n">3</div><p>在场内以高于净值的价格卖出，赚取溢价差额</p></div>
+    <p style="margin-top:10px;font-size:12px;color:var(--td)">⚠ 转托管期间溢价可能收窄，存在价格风险</p>
+  </div>
+  <div class="icard">
+    <h3>指标说明</h3>
+    <ul>
+      <li><b>实时溢价率</b> = 场内实时价 ÷ 天天估算净值 − 1</li>
+      <li><b>T-1溢价率</b> = 昨日收盘价 ÷ T-1官方净值 − 1</li>
+      <li><b>套利净空间</b> = 实时溢价率 − 申购费（折扣后）</li>
+      <li><b>估算净值</b> 由天天基金每15分钟更新，非官方数据</li>
+      <li><b>转托管天数</b> 为参考值，以基金公司公告为准</li>
+    </ul>
+  </div>
+  <div class="icard">
+    <h3>注意事项</h3>
+    <ul>
+      <li>QDII基金须关注外汇额度及换汇成本</li>
+      <li>溢价在转托管期可能大幅收窄甚至转负</li>
+      <li>申购截止时间通常为15:00，超时顺延至次日</li>
+      <li>大额申购可能导致基金规模快速膨胀</li>
+      <li>部分平台"1折"费率不适用所有基金，请实际确认</li>
+    </ul>
+  </div>
+</div>
+
+<div class="disc">
+  <h4>⚠ 免责声明</h4>
+  <p>本页面所有数据仅供参考，不构成任何投资建议。估算净值来源于天天基金，与实际净值存在偏差。场内价格存在延迟。实际套利收益受申购时点、市场价格波动、费率折扣、转托管耗时等多重因素影响，投资者需自行承担风险。</p>
+</div>
+</div><!-- /wrap -->
+
+<footer><div class="fi">
+  <div class="logo" style="font-size:15px"><span class="logo-i">ZX</span>ZX Capital</div>
+  <div class="fc">数据来源：新浪财经行情 · 天天基金估算净值<br>本工具不构成投资建议，套利有风险，操作需谨慎</div>
+</div></footer>
+
+<script>
+// ══════════════════════════════════════════════════════════
+// LOF FUND CONFIGURATION
+// Fields: code, mkt, fee(%), limit(元, 0=unlimited), qdii, open, transfer(days)
+// Filter applied: open===true AND (limit===0 OR limit>=100)
+// fee/transfer/limit are manually maintained — update as needed
+// ══════════════════════════════════════════════════════════
+const ALL_FUNDS = [
+  {code:'501018',mkt:'sz',fee:1.20,limit:0,      qdii:true, open:true, transfer:3},  // 南方原油LOF
+  {code:'162411',mkt:'sz',fee:1.50,limit:100000, qdii:true, open:true, transfer:5},  // 华宝油气LOF
+  {code:'163407',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:7},  // 兴全全球视野LOF
+  {code:'161725',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 招商中证白酒LOF
+  {code:'163406',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全趋势LOF
+  {code:'163417',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全合润LOF
+  {code:'161005',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 富国天惠LOF
+  {code:'501009',mkt:'sz',fee:1.50,limit:10,     qdii:false,open:false,transfer:7},  // 华夏大盘LOF (limited, filtered out)
+];
+
+// Apply filter: open AND limit eligible
+const FUNDS = ALL_FUNDS.filter(f => f.open && (f.limit === 0 || f.limit >= 100));
+
+// ══════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════
+const state = {
+  data: {},          // code -> {name, rtPrice, prevClose, estNav, t1Nav, estTime, t1Date}
+  discount: 0.1,     // fee discount multiplier
+  sortKey: 'rt',
+  sortDir: -1,       // -1=desc, 1=asc
+  cdSec: 60,
+  cdTimer: null,
+  loading: false,
+};
+
+// ══════════════════════════════════════════════════════════
+// MARKET STATUS
+// ══════════════════════════════════════════════════════════
+function mktStatus() {
+  const d = new Date();
+  const day = d.getDay();
+  if (day === 0 || day === 6) return 'closed';
+  const m = d.getHours() * 60 + d.getMinutes();
+  if (m >= 9*60+15 && m < 9*60+30) return 'pre';
+  if (m >= 9*60+30 && m < 15*60)   return 'open';
+  return 'closed';
+}
+
+function renderMktStatus() {
+  const s = mktStatus();
+  const dot = document.getElementById('mktDot');
+  const lbl = document.getElementById('mktLabel');
+  dot.className = 'mkt-dot ' + (s==='open'?'dot-open':s==='pre'?'dot-pre':'dot-cls');
+  lbl.textContent = s==='open'?'市场开盘中 (9:30–15:00)':s==='pre'?'集合竞价 (9:15–9:30)':'市场已收盘';
+}
+
+// ══════════════════════════════════════════════════════════
+// COUNTDOWN
+// ══════════════════════════════════════════════════════════
+function startCountdown() {
+  clearInterval(state.cdTimer);
+  state.cdSec = 60;
+  document.getElementById('cdTimer').textContent = '60s';
+  state.cdTimer = setInterval(() => {
+    state.cdSec--;
+    document.getElementById('cdTimer').textContent = state.cdSec + 's';
+    if (state.cdSec <= 0) { clearInterval(state.cdTimer); doRefresh(); }
+  }, 1000);
+}
+
+// ══════════════════════════════════════════════════════════
+// DATA FETCHING
+// ══════════════════════════════════════════════════════════
+
+// Tencent Finance: batch price fetch (UTF-8, better CORS)
+// Response: v_sz501018="1~名称~代码~现价~昨收~开盘~成交量~成交额~..."
+async function fetchPrices() {
+  const sym = FUNDS.map(f => f.mkt + f.code).join(',');
+  try {
+    const resp = await fetch(`https://qt.gtimg.cn/q=${sym}&_=${Date.now()}`);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    let got = 0;
+    for (const line of text.split('\n')) {
+      const m = line.match(/v_([a-z]{2})(\d+)="([^"]*)"/);
+      if (!m) continue;
+      const code = m[2];
+      const p = m[3].split('~');
+      if (p.length < 5 || !p[3]) continue;
+      if (!state.data[code]) state.data[code] = {};
+      state.data[code].name      = p[1] || '';
+      state.data[code].rtPrice   = parseFloat(p[3]) || 0;
+      state.data[code].prevClose = parseFloat(p[4]) || 0;
+      got++;
+    }
+    return got > 0;
+  } catch(e) {
+    console.warn('Tencent fetch failed, trying Sina:', e.message);
+    return fetchSinaFallback(sym);
+  }
+}
+
+// Sina Finance fallback (GBK-encoded)
+async function fetchSinaFallback(sym) {
+  try {
+    const resp = await fetch(`https://hq.sinajs.cn/rn=${Date.now()}&list=${sym}`,
+      {headers:{Referer:'https://finance.sina.com.cn'}});
+    const buf = await resp.arrayBuffer();
+    let text;
+    try { text = new TextDecoder('gbk').decode(buf); }
+    catch(e) { text = new TextDecoder('utf-8').decode(buf); }
+    let got = 0;
+    for (const line of text.split('\n')) {
+      const m = line.match(/hq_str_([a-z]{2})(\d+)="([^"]*)"/);
+      if (!m) continue;
+      const p = m[3].split(',');
+      if (p.length < 10 || !p[3]) continue;
+      const code = m[2];
+      if (!state.data[code]) state.data[code] = {};
+      state.data[code].name      = p[0] || '';
+      state.data[code].rtPrice   = parseFloat(p[3]) || 0;
+      state.data[code].prevClose = parseFloat(p[2]) || 0;
+      got++;
+    }
+    return got > 0;
+  } catch(e) {
+    console.warn('Sina fallback also failed:', e.message);
+    return false;
+  }
+}
+
+// Tiantian Fund: JSONP estimated NAV per fund
+function fetchTiantian(code) {
+  return new Promise(resolve => {
+    const cb = `_lof_${code}_${Date.now()}`;
+    let done = false;
+    const timer = setTimeout(() => { if(!done){done=true;resolve(null);} delete window[cb]; }, 7000);
+    window[cb] = data => {
+      if (!done) { done=true; clearTimeout(timer); resolve(data); }
+      delete window[cb];
+    };
+    const s = document.createElement('script');
+    s.src = `https://fundgz.1234567.com.cn/js/${code}.js?callback=${cb}&_=${Date.now()}`;
+    s.onerror = () => { if(!done){done=true;clearTimeout(timer);resolve(null);} };
+    document.head.appendChild(s);
+    setTimeout(() => { try{document.head.removeChild(s);}catch(e){} }, 8000);
+  });
+}
+
+async function fetchAllNAVs() {
+  const results = await Promise.allSettled(FUNDS.map(f => fetchTiantian(f.code)));
+  results.forEach((r, i) => {
+    if (r.status !== 'fulfilled' || !r.value) return;
+    const d = r.value;
+    const code = FUNDS[i].code;
+    if (!state.data[code]) state.data[code] = {};
+    const sd = state.data[code];
+    if (!sd.name) sd.name = d.name || '';
+    sd.t1Nav   = parseFloat(d.dwjz) || 0;
+    sd.estNav  = parseFloat(d.gsz)  || 0;
+    sd.estTime = d.gztime || '';
+    sd.t1Date  = d.jzrq   || '';
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// CALCULATION
+// ══════════════════════════════════════════════════════════
+function calcRow(fund) {
+  const d = state.data[fund.code] || {};
+  const effectiveFee = fund.fee * state.discount;
+  const rtPrem  = (d.estNav  > 0 && d.rtPrice   > 0) ? (d.rtPrice   / d.estNav  - 1) * 100 : null;
+  const t1Prem  = (d.t1Nav   > 0 && d.prevClose > 0) ? (d.prevClose / d.t1Nav   - 1) * 100 : null;
+  const net     = rtPrem !== null ? rtPrem - effectiveFee : null;
+  return {
+    ...fund, ...d,
+    rtPrem, t1Prem, net, effectiveFee,
+    // sortable by numeric key name
+    rt: rtPrem, t1: t1Prem, price: d.rtPrice||0,
+    estnav: d.estNav||0, t1nav: d.t1Nav||0,
+    name: d.name || fund.code,
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════════════════
+function pClass(v) {
+  if (v === null) return 'p-na';
+  if (v >= 2)    return 'p-hi';
+  if (v >= 0.5)  return 'p-md';
+  if (v >= 0)    return 'p-lo';
+  return 'p-neg';
+}
+
+function fmt(v, digits=2, sign=true) {
+  if (v === null || isNaN(v) || v === 0 && digits === 4) return '<span class="p-na">--</span>';
+  const s = (sign && v > 0 ? '+' : '') + v.toFixed(digits);
+  return s;
+}
+
+function fmtPct(v) {
+  if (v === null || isNaN(v)) return '<span class="p-na">--</span>';
+  const cls = pClass(v);
+  return `<span class="${cls}">${(v>=0?'+':'') + v.toFixed(2)}%</span>`;
+}
+
+function fmtPrice(v) {
+  if (!v || isNaN(v)) return '<span class="p-na">--</span>';
+  return `<span class="mono">${v.toFixed(4)}</span>`;
+}
+
+function netCell(net, cls) {
+  if (net === null) return '<span class="p-na">--</span>';
+  const pct = Math.min(Math.max(net / 5, 0), 1) * 100;
+  const color = net >= 0 ? 'var(--g)' : 'var(--r)';
+  return `<div class="net-cell">
+    <span class="${cls}">${(net>=0?'+':'') + net.toFixed(2)}%</span>
+    <div class="bar-o"><div class="bar-i" style="width:${pct}%;background:${color}"></div></div>
+  </div>`;
+}
+
+function renderTable() {
+  const rows = FUNDS.map(f => calcRow(f));
+  const sk = state.sortKey;
+  const sd = state.sortDir;
+  rows.sort((a, b) => {
+    let va = a[sk], vb = b[sk];
+    if (typeof va === 'string') return sd * va.localeCompare(vb);
+    if (va === null || va === undefined) va = sd === -1 ? -Infinity : Infinity;
+    if (vb === null || vb === undefined) vb = sd === -1 ? -Infinity : Infinity;
+    return sd * (va < vb ? -1 : va > vb ? 1 : 0);
+  });
+
+  const tbody = document.getElementById('tbody');
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr class="load-row"><td colspan="10">无符合条件的基金</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const lim = r.limit === 0 ? '不限' : r.limit >= 10000 ? (r.limit/10000)+'万' : r.limit+'元';
+    const feeLine = state.discount === 1 ? r.fee+'%'
+      : state.discount === 0 ? '<span style="color:var(--g)">0%（免费）</span>'
+      : `${r.fee}% <span class="fee-detail" style="color:var(--amb)">→ ${r.effectiveFee.toFixed(2)}%</span>`;
+
+    // Stale data warning: if estTime is from a previous day
+    let stale = false;
+    if (r.estTime) {
+      const today = new Date().toISOString().slice(0,10);
+      stale = !r.estTime.startsWith(today);
+    }
+    const estTimeDisp = r.estTime
+      ? `<div style="font-size:10px;color:${stale?'var(--r)':'var(--td)'}">${r.estTime.slice(11)||r.estTime}${stale?' ⚠':''}</div>`
+      : '';
+
+    return `<tr>
+      <td>
+        <div style="font-weight:600;margin-bottom:3px">${r.name||r.code}</div>
+        <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+          <a href="https://fund.eastmoney.com/${r.code}.html" target="_blank" rel="noopener" class="tk">${r.code}</a>
+          ${r.qdii ? '<span class="badge b-qdii">QDII</span>' : ''}
+          <span class="badge b-open">可申购</span>
+          <span style="font-size:10px;color:var(--td)">日限${lim}</span>
+        </div>
+      </td>
+      <td>${fmtPct(r.rtPrem)}</td>
+      <td>${fmtPct(r.t1Prem)}</td>
+      <td>${netCell(r.net, pClass(r.net))}</td>
+      <td>${fmtPrice(r.rtPrice)}</td>
+      <td>
+        ${fmtPrice(r.estNav)}
+        ${estTimeDisp}
+      </td>
+      <td>
+        ${fmtPrice(r.t1Nav)}
+        ${r.t1Date ? `<div style="font-size:10px;color:var(--td)">${r.t1Date}</div>` : ''}
+      </td>
+      <td>${feeLine}</td>
+      <td class="mono">${r.transfer ? 'T+'+r.transfer : '--'}</td>
+      <td><span class="badge b-open">申购中</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// SORT
+// ══════════════════════════════════════════════════════════
+const SORT_COLS = ['rt','t1','net','price','estnav','t1nav'];
+
+function sortBy(key) {
+  if (state.sortKey === key) state.sortDir *= -1;
+  else { state.sortKey = key; state.sortDir = -1; }
+  updateSortUI();
+  renderTable();
+}
+
+function updateSortUI() {
+  SORT_COLS.forEach(k => {
+    const th = document.getElementById('th_'+k);
+    const sa = document.getElementById('sa_'+k);
+    if (!th) return;
+    if (state.sortKey === k) {
+      th.classList.add('srt');
+      sa.textContent = state.sortDir === -1 ? '↓' : '↑';
+    } else {
+      th.classList.remove('srt');
+      sa.textContent = '↕';
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// FEE DISCOUNT
+// ══════════════════════════════════════════════════════════
+function setDiscount(d) {
+  state.discount = d;
+  ['fb0','fb1','fb2'].forEach(id => document.getElementById(id).classList.remove('on'));
+  const map = {0:'fb0', 0.1:'fb1', 1:'fb2'};
+  if (map[d]) document.getElementById(map[d]).classList.add('on');
+  renderTable();
+}
+
+// ══════════════════════════════════════════════════════════
+// REFRESH
+// ══════════════════════════════════════════════════════════
+async function doRefresh() {
+  if (state.loading) return;
+  state.loading = true;
+  clearInterval(state.cdTimer);
+  document.getElementById('cdTimer').textContent = '加载中…';
+
+  const rfBtn = document.getElementById('rfBtn');
+  const rfIcon = document.getElementById('rfIcon');
+  rfBtn.classList.add('loading');
+  rfIcon.textContent = '↻';
+  rfIcon.style.display = 'inline-block';
+  rfIcon.style.animation = 'spin .7s linear infinite';
+
+  const errBar = document.getElementById('errBar');
+  errBar.style.display = 'none';
+
+  // First load: show spinner
+  if (Object.keys(state.data).length === 0) {
+    document.getElementById('tbody').innerHTML =
+      '<tr class="load-row"><td colspan="10"><span class="lspin"></span>正在加载数据…</td></tr>';
+  }
+
+  const [sinaOk] = await Promise.all([fetchPrices(), fetchAllNAVs()]);
+  if (!sinaOk) {
+    errBar.textContent = '⚠ 行情接口加载失败（CORS 限制，本地预览正常，部署后可用）——实时价格显示为 "--"，净值数据仍可用';
+    errBar.style.display = 'inline-block';
+  }
+
+  const now = new Date();
+  document.getElementById('updTime').textContent =
+    now.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+  renderMktStatus();
+  renderTable();
+
+  rfIcon.style.animation = '';
+  rfIcon.textContent = '↻';
+  rfBtn.classList.remove('loading');
+  state.loading = false;
+
+  if (mktStatus() !== 'closed') {
+    startCountdown();
+  } else {
+    document.getElementById('cdTimer').textContent = '已收盘';
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════
+renderMktStatus();
+setInterval(renderMktStatus, 30000);
+doRefresh();
+</script>
+</body></html>
