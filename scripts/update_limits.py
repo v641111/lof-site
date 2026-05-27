@@ -22,11 +22,14 @@ Output: data/limits.json with shape:
     }
   }
 """
-import json, re, sys, time
+import json, re, sys, time, os
 import urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Ensure local imports (benchmarks.py) work regardless of cwd
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ROOT = Path(__file__).resolve().parent.parent
 CODES_FILE = ROOT / "scripts" / "lof-codes.txt"
@@ -168,6 +171,97 @@ def fundgz_has_nav(code: str) -> bool:
         return False
 
 
+def fetch_yahoo_chart(ticker: str, range_days: int = 15) -> list | None:
+    """Fetch Yahoo Finance v8 chart daily data. Returns [{date:'YYYY-MM-DD', close: float}, ...]."""
+    import json as _j, urllib.parse
+    try:
+        sym_enc = urllib.parse.quote(ticker)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym_enc}?range={range_days}d&interval=1d"
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            j = _j.loads(resp.read().decode("utf-8"))
+        res = (j.get("chart") or {}).get("result") or []
+        if not res:
+            return None
+        ts = res[0].get("timestamp") or []
+        closes = (((res[0].get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+        import datetime as _dt
+        out = []
+        for t, c in zip(ts, closes):
+            if c is None:
+                continue
+            d = _dt.datetime.fromtimestamp(t, _dt.timezone.utc).date().isoformat()
+            out.append({"date": d, "close": float(c)})
+        return out if out else None
+    except Exception:
+        return None
+
+
+def fetch_sina_index(symbol: str) -> dict | None:
+    """Fetch one A-share index quote from Sina. symbol like 's_sh000300'.
+    Returns {price, prevClose, changePct} or None.
+    s_xxx format response: var hq_str_s_sh000300="名称,价格,涨跌额,涨跌幅,成交量,成交额";
+    """
+    try:
+        url = f"https://hq.sinajs.cn/list={symbol}"
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://finance.sina.com.cn"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+        # Sina returns GBK
+        text = raw.decode("gbk", errors="replace")
+        m = re.search(r'"([^"]+)"', text)
+        if not m:
+            return None
+        parts = m.group(1).split(",")
+        if len(parts) < 4:
+            return None
+        # parts: name, price, change, change_pct, volume, amount
+        price = float(parts[1])
+        change = float(parts[2])
+        prevClose = price - change
+        changePct = float(parts[3]) if parts[3] else 0.0
+        return {"price": price, "prevClose": prevClose, "changePct": changePct}
+    except Exception:
+        return None
+
+
+def lookup_benchmark_change(chart: list, jzrq: str, asset_type: str) -> dict | None:
+    """
+    Given a chart (list of {date, close}) and the NAV date string,
+    find the benchmark close that was "available" when the NAV was published,
+    and compute changePct relative to the latest close.
+
+    Date alignment:
+      - 'hk':       look for close on jzrq (same day)
+      - 'us'/'futures': look for the latest close STRICTLY BEFORE jzrq (US ends ~04:00 CST next day)
+    """
+    if not chart or not jzrq:
+        return None
+    import datetime as _dt
+    try:
+        target = _dt.date.fromisoformat(jzrq)
+    except Exception:
+        return None
+    if asset_type == "hk":
+        cands = [e for e in chart if e["date"] <= jzrq]
+    else:
+        cands = [e for e in chart if e["date"] < jzrq]
+    if not cands:
+        return None
+    nav_date_entry = max(cands, key=lambda e: e["date"])
+    latest = chart[-1]
+    if nav_date_entry["close"] <= 0:
+        return None
+    chg = (latest["close"] / nav_date_entry["close"] - 1.0) * 100
+    return {
+        "navDateClose": nav_date_entry["close"],
+        "navDateMatched": nav_date_entry["date"],
+        "latestClose": latest["close"],
+        "latestDate": latest["date"],
+        "changePct": chg,
+    }
+
+
 def fetch_kline_and_nav(code: str, mkt_hint: str | None = None) -> dict | None:
     """Fetch (a) latest published NAV from Eastmoney f10/lsjz,
     and (b) the LOF closing price on that NAV's date from Tencent K-line.
@@ -268,9 +362,71 @@ def main():
             if (i+1) % 50 == 0:
                 print(f"  nav progress: {i+1}/{len(codes)}")
     print(f"  NAV+K-line ok: {kn_ok}/{len(codes)}")
-    # Bonus check: how many got navDateClose populated?
     with_close = sum(1 for v in results.values() if v.get("nav") and v["nav"].get("navDateClose"))
     print(f"  navDateClose available: {with_close}/{kn_ok}")
+
+    # ─── 集思录算法核心 ────────────────────────────────────────
+    # 对有 benchmark 映射的基金（QDII 跟踪海外、A股指数型），
+    # 用 benchmark 当前价 vs NAV发布时刻 benchmark close 算 changePct
+    # estNav = NAV × (1 + changePct)
+    print("\nFetching benchmark prices for tracked funds...")
+    from benchmarks import YAHOO_BENCHMARKS, SINA_BENCHMARKS
+
+    # Unique tickers to fetch
+    unique_yahoo = sorted(set(t for (t, _, _) in YAHOO_BENCHMARKS.values()))
+    unique_sina = sorted(set(s for (s, _, _) in SINA_BENCHMARKS.values()))
+    print(f"  Yahoo tickers: {len(unique_yahoo)}, Sina indices: {len(unique_sina)}")
+
+    yahoo_charts: dict = {}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(fetch_yahoo_chart, t): t for t in unique_yahoo}
+        for fut in as_completed(futs):
+            t = futs[fut]
+            yahoo_charts[t] = fut.result()
+    yahoo_ok = sum(1 for v in yahoo_charts.values() if v)
+    print(f"  Yahoo charts ok: {yahoo_ok}/{len(unique_yahoo)}")
+
+    sina_quotes: dict = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {ex.submit(fetch_sina_index, s): s for s in unique_sina}
+        for fut in as_completed(futs):
+            s = futs[fut]
+            sina_quotes[s] = fut.result()
+    sina_ok = sum(1 for v in sina_quotes.values() if v)
+    print(f"  Sina indices ok: {sina_ok}/{len(unique_sina)}")
+
+    # Attach benchmark data to each fund's nav block
+    benchmark_attached = 0
+    for code, mapping in YAHOO_BENCHMARKS.items():
+        ticker, asset_type, name = mapping
+        chart = yahoo_charts.get(ticker)
+        nav = results.get(code, {}).get("nav") or {}
+        jzrq = nav.get("jzrq")
+        if not chart or not jzrq:
+            continue
+        bench = lookup_benchmark_change(chart, jzrq, asset_type)
+        if bench:
+            results.setdefault(code, {}).setdefault("nav", {})["benchmark"] = {
+                "ticker": ticker, "name": name, "type": asset_type, "source": "yahoo",
+                **bench,
+            }
+            benchmark_attached += 1
+
+    for code, mapping in SINA_BENCHMARKS.items():
+        symbol, asset_type, name = mapping
+        q = sina_quotes.get(symbol)
+        if not q:
+            continue
+        # For Sina, we use the today's quote change as benchmark.changePct
+        # (assumes NAV was published last night reflecting yesterday's close)
+        results.setdefault(code, {}).setdefault("nav", {})["benchmark"] = {
+            "ticker": symbol, "name": name, "type": asset_type, "source": "sina",
+            "latestClose": q["price"], "navDateClose": q["prevClose"],
+            "changePct": q["changePct"],
+        }
+        benchmark_attached += 1
+
+    print(f"  benchmark mappings attached: {benchmark_attached}/{len(YAHOO_BENCHMARKS) + len(SINA_BENCHMARKS)}")
 
     # Compute summary stats
     ok = sum(1 for v in results.values() if "error" not in v and v.get("apply"))
@@ -279,11 +435,12 @@ def main():
     open_funds = sum(1 for v in results.values() if v.get("apply") and "开放" in v["apply"] and v.get("limit") is None)
     over_100 = sum(1 for v in results.values() if v.get("limit") is None or (v.get("limit") and v["limit"] >= 100))
     nav_complete = sum(1 for v in results.values() if v.get("nav") and v["nav"].get("dwjz") and v["nav"].get("navDateClose"))
+    with_benchmark = sum(1 for v in results.values() if v.get("nav") and v["nav"].get("benchmark"))
 
     out = {
         "_meta": {
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": "fundf10.eastmoney.com (jjgg/lsjz) + qt.gtimg.cn (kline)",
+            "source": "eastmoney(jjgg/lsjz) + tencent(kline) + yahoo(chart) + sina(idx)",
             "total": len(codes),
             "parsed": ok,
             "paused": paused,
@@ -291,6 +448,7 @@ def main():
             "open": open_funds,
             "eligible_arb": over_100,
             "nav_complete": nav_complete,
+            "with_benchmark": with_benchmark,
         },
         "data": results,
     }

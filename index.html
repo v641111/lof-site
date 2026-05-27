@@ -863,37 +863,45 @@ function calcRow(fund) {
   // T-1 净值优先级:
   //   1) limits.json 的 fund.nav.dwjz   (来自 Eastmoney f10/lsjz, 最新公布净值)
   //   2) Tiantian fundgz 的 dwjz          (实时但偶尔滞后)
-  // 同时拿到 NAV日 的收盘价用于精确自算
-  let t1Nav, t1Date, navDateClose;
+  let t1Nav, t1Date, navDateClose, benchmark;
   if (fund.nav && fund.nav.dwjz > 0) {
     t1Nav = fund.nav.dwjz;
     t1Date = fund.nav.jzrq;
-    navDateClose = fund.nav.navDateClose;   // 该 NAV 对应交易日的 LOF 收盘价
+    navDateClose = fund.nav.navDateClose;
+    benchmark = fund.nav.benchmark;   // ← 集思录式跟踪基准 (Yahoo/Sina)
   } else {
     t1Nav = d.t1Nav;
     t1Date = d.t1Date;
     navDateClose = null;
+    benchmark = null;
   }
   const navStale = isNavStale(t1Date);
 
-  // 实时溢价率 估算净值 = NAV_已公布 × (实时价 / NAV日的收盘价)
-  //   含义: 假设基金净值跟着 LOF 价格按比例变化
-  //   数学结果: rtPrem = navDateClose / NAV_已公布 - 1 = "NAV日收盘那一刻的真实溢价"
-  //   优点: 避免 24% 这种"API估算跟不上"的虚高
-  //   局限: 全天数值不变 (跟 prevClose 那次价格更新一起变)
+  // 估算净值的优先级 (从最准到最粗):
+  //   1) BENCHMARK (集思录算法): estNav = NAV × (1 + 基准指数今日变化%)
+  //      - 适用于 QDII / A股指数基金, 反映"基金应该跟基准同步"的真实净值
+  //      - 盘中实时变化, 不依赖 LOF 自身价格
+  //   2) K线自算: estNav = NAV × (实时价 / NAV日收盘价)
+  //      - 假设 LOF 价格与净值同步 (1:1 跟踪)
+  //      - 数学等价于"昨日收盘溢价", 全天不变
+  //   3) Tiantian gsz API
+  //   4) prevClose 粗算
   let estNav, estSource;
-  if (t1Nav > 0 && d.rtPrice > 0 && navDateClose > 0) {
+  if (benchmark && benchmark.changePct !== undefined && benchmark.changePct !== null && t1Nav > 0) {
+    estNav = t1Nav * (1 + benchmark.changePct / 100);
+    estSource = 'benchmark';
+  } else if (t1Nav > 0 && d.rtPrice > 0 && navDateClose > 0) {
     estNav = t1Nav * (d.rtPrice / navDateClose);
-    estSource = 'calc';            // 自算: 用 K线 NAV日 收盘价做基准
+    estSource = 'calc';
   } else if (d.estNav > 0) {
     estNav = d.estNav;
-    estSource = 'api';             // 兜底: Tiantian gsz 估算 (盘中实时但不精确)
+    estSource = 'api';
   } else if (t1Nav > 0 && d.rtPrice > 0 && d.prevClose > 0) {
     estNav = t1Nav * (d.rtPrice / d.prevClose);
-    estSource = 'rough';           // 退而求其次: 用 prevClose 当基准 (有偏差)
+    estSource = 'rough';
   } else {
     estNav = t1Nav;
-    estSource = 'flat';            // 啥都没有, 用净值本身
+    estSource = 'flat';
   }
 
   const rtPrem = (estNav > 0 && d.rtPrice > 0) ? (d.rtPrice / estNav - 1) * 100 : null;
@@ -902,7 +910,7 @@ function calcRow(fund) {
 
   return {
     ...fund, ...d,
-    t1Nav, t1Date, navDateClose,
+    t1Nav, t1Date, navDateClose, benchmark,
     rtPrem, t1Prem, net, effectiveFee, navStale, estNavComputed: estNav, estSource,
     rt: rtPrem, t1: t1Prem, price: d.rtPrice||0,
     estnav: estNav||0, t1nav: t1Nav||0, limit: fund.limit||0,
@@ -1020,8 +1028,10 @@ function renderTable() {
       <td>${fmtPrice(r.rtPrice)}</td>
       <td>
         ${fmtPrice(r.estNavComputed)}
-        ${r.estSource === 'calc'
-          ? `<div style="font-size:10px;color:var(--g)" title="公式：NAV(${r.t1Date}) × 实时价/${r.navDateClose}">⟲ 自算·精确</div>`
+        ${r.estSource === 'benchmark'
+          ? `<div style="font-size:10px;color:var(--g)" title="跟踪 ${r.benchmark.name} (${r.benchmark.ticker})&#10;基准变化: ${r.benchmark.changePct>=0?'+':''}${r.benchmark.changePct.toFixed(2)}%">🎯 ${r.benchmark.name}</div>`
+          : r.estSource === 'calc'
+          ? `<div style="font-size:10px;color:var(--tm)" title="公式：NAV(${r.t1Date}) × 实时价/${r.navDateClose}">⟲ K线自算</div>`
           : r.estSource === 'rough'
           ? `<div style="font-size:10px;color:var(--amb)" title="基于昨收价的估算,可能漏掉中间日涨跌">⟲ 自算·粗略</div>`
           : r.estSource === 'api'
