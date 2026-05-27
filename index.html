@@ -226,14 +226,29 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
 // fee/transfer/limit are manually maintained — update as needed
 // ══════════════════════════════════════════════════════════
 const ALL_FUNDS = [
-  {code:'501018',mkt:'sz',fee:1.20,limit:0,      qdii:true, open:true, transfer:3},  // 南方原油LOF
+  // ─── QDII 类（套利机会较多）─────────────────
+  {code:'501018',mkt:'sh',fee:1.20,limit:0,      qdii:true, open:true, transfer:3},  // 南方原油LOF
   {code:'162411',mkt:'sz',fee:1.50,limit:100000, qdii:true, open:true, transfer:5},  // 华宝油气LOF
-  {code:'163407',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:7},  // 兴全全球视野LOF
+  {code:'161226',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 国投白银LOF
+  {code:'160416',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 华安石油基金LOF
+  {code:'161116',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 易方达黄金主题LOF
+  {code:'161129',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 易方达原油LOF
+  {code:'160723',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 嘉实原油LOF
+  {code:'162719',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 广发石油LOF
+  {code:'163208',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 诺安全球油气能源LOF
+  {code:'165513',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 中信保诚商品LOF
+  {code:'162415',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 华宝美国消费LOF
+  {code:'160924',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 大成恒生指数LOF
+  {code:'160125',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 南方香港LOF
+  {code:'501301',mkt:'sh',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 香港大盘LOF
+  {code:'161714',mkt:'sz',fee:1.50,limit:0,      qdii:true, open:true, transfer:5},  // 招商标普金砖四国
+  // ─── A股 主动管理 / 指数 ────────────────────
   {code:'161725',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 招商中证白酒LOF
-  {code:'163406',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全趋势LOF
-  {code:'163417',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全合润LOF
+  {code:'163406',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全合润LOF
+  {code:'163417',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全合宜LOF
+  {code:'163407',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 兴全沪深300LOF
   {code:'161005',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 富国天惠LOF
-  {code:'501009',mkt:'sz',fee:1.50,limit:10,     qdii:false,open:false,transfer:7},  // 华夏大盘LOF (limited, filtered out)
+  {code:'162703',mkt:'sz',fee:1.50,limit:0,      qdii:false,open:true, transfer:7},  // 广发小盘LOF
 ];
 
 // Apply filter: open AND limit eligible
@@ -291,14 +306,18 @@ function startCountdown() {
 // DATA FETCHING
 // ══════════════════════════════════════════════════════════
 
-// Tencent Finance: batch price fetch (UTF-8, better CORS)
+// Tencent Finance: batch price fetch (returns GBK-encoded)
 // Response: v_sz501018="1~名称~代码~现价~昨收~开盘~成交量~成交额~..."
 async function fetchPrices() {
   const sym = FUNDS.map(f => f.mkt + f.code).join(',');
   try {
     const resp = await fetch(`https://qt.gtimg.cn/q=${sym}&_=${Date.now()}`);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const text = await resp.text();
+    // Tencent returns GBK-encoded text — must decode explicitly or names break
+    const buf = await resp.arrayBuffer();
+    let text;
+    try { text = new TextDecoder('gbk').decode(buf); }
+    catch(e) { text = new TextDecoder('utf-8').decode(buf); }
     let got = 0;
     for (const line of text.split('\n')) {
       const m = line.match(/v_([a-z]{2})(\d+)="([^"]*)"/);
@@ -463,14 +482,18 @@ function renderTable() {
       : state.discount === 0 ? '<span style="color:var(--g)">0%（免费）</span>'
       : `${r.fee}% <span class="fee-detail" style="color:var(--amb)">→ ${r.effectiveFee.toFixed(2)}%</span>`;
 
-    // Stale data warning: if estTime is from a previous day
+    // QDII的gztime可能是次日凌晨（跟踪美股隔夜），不强行判stale
+    // 仅当估算时间字符串日期早于今天1天以上才提示
     let stale = false;
-    if (r.estTime) {
-      const today = new Date().toISOString().slice(0,10);
-      stale = !r.estTime.startsWith(today);
+    if (r.estTime && r.estTime.length >= 10) {
+      const estDate = new Date(r.estTime.replace(' ','T'));
+      if (!isNaN(estDate)) {
+        const ageHrs = (Date.now() - estDate.getTime()) / 3600000;
+        stale = ageHrs > 30;  // 超过30小时才算明显过期
+      }
     }
     const estTimeDisp = r.estTime
-      ? `<div style="font-size:10px;color:${stale?'var(--r)':'var(--td)'}">${r.estTime.slice(11)||r.estTime}${stale?' ⚠':''}</div>`
+      ? `<div style="font-size:10px;color:${stale?'var(--r)':'var(--td)'}">${r.estTime.slice(5)||r.estTime}${stale?' ⚠':''}</div>`
       : '';
 
     return `<tr>
