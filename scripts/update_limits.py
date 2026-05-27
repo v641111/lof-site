@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """
-Scrape Eastmoney announcement pages for LOF subscription status & daily limit.
+Scrape Eastmoney for per-LOF data:
+  1. Subscription status & daily limit (jjgg_<code>_3.html "交易状态" block)
+  2. NAV backup via f10/lsjz when Tiantian fundgz returns empty (QDII gap)
 
-The fund detail page (https://fundf10.eastmoney.com/jjgg_<code>_3.html) renders a
-"交易状态" block server-side, e.g.:
-
-    交易状态：<span>暂停申购 </span>（<span>单日累计购买上限10元</span>）<span>开放赎回</span>
-
-We extract three pieces:
-  - apply  : 申购状态 ("开放申购" / "暂停申购" / "限制大额申购" / "暂停大额申购" ...)
-  - limit  : 单日累计申购上限 (integer 元, None when unlimited)
-  - redeem : 赎回状态 ("开放赎回" / "暂停赎回")
-
-Output: data/limits.json
+Output: data/limits.json with shape:
+  {
+    "_meta": {...},
+    "data": {
+      "<code>": {
+        "apply": "开放申购|暂停申购|限大额",
+        "limit": int|null,        # 元
+        "redeem": "开放赎回|暂停赎回",
+        "limit_text": str|null,
+        "navBackup": {            # only present when fundgz lacks data
+          "dwjz": float,
+          "jzrq": "YYYY-MM-DD",
+          "prevDwjz": float       # day before, for ratio reference
+        }|null
+      }
+    }
+  }
 """
 import json, re, sys, time
 import urllib.request, urllib.error
@@ -120,6 +128,46 @@ def fetch_one(code: str, retries: int = 2) -> tuple:
     return code, {"error": f"fetch failed: {last_err}"}
 
 
+def fetch_nav_backup(code: str) -> dict | None:
+    """Fallback NAV via Eastmoney f10/lsjz for funds where Tiantian fundgz is empty.
+    Returns {'dwjz': float, 'jzrq': str, 'prevDwjz': float} or None."""
+    import json as _json
+    url = f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=2"
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://fundf10.eastmoney.com/"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            j = _json.loads(resp.read().decode("utf-8", errors="replace"))
+        items = (j.get("Data") or {}).get("LSJZList") or []
+        if not items:
+            return None
+        latest = items[0]
+        prev = items[1] if len(items) > 1 else None
+        return {
+            "dwjz": float(latest.get("DWJZ") or 0),
+            "jzrq": latest.get("FSRQ"),
+            "prevDwjz": float(prev.get("DWJZ") or 0) if prev else None,
+        }
+    except Exception:
+        return None
+
+
+def fundgz_has_nav(code: str) -> bool:
+    """Quick check if Tiantian fundgz returns usable data."""
+    url = f"https://fundgz.1234567.com.cn/js/{code}.js?rt={int(time.time()*1000)}"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        m = re.match(r"jsonpgz\((.+)\);?", body.strip())
+        if not m or not m.group(1).strip():
+            return False
+        import json as _j
+        d = _j.loads(m.group(1))
+        return bool(float(d.get("dwjz", 0) or 0))
+    except Exception:
+        return False
+
+
 def main():
     if not CODES_FILE.exists():
         print(f"ERROR: {CODES_FILE} not found", file=sys.stderr)
@@ -138,23 +186,46 @@ def main():
             if done % 50 == 0 or done == len(codes):
                 print(f"  progress: {done}/{len(codes)}")
 
+    # Backfill NAVs for funds where Tiantian fundgz has no data (mostly QDII)
+    print("\nChecking which funds need NAV backup...")
+    need_backup = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        check = {ex.submit(fundgz_has_nav, c): c for c in codes}
+        for fut in as_completed(check):
+            c = check[fut]
+            if not fut.result():
+                need_backup.append(c)
+    print(f"  {len(need_backup)} funds need NAV backup, fetching from f10/lsjz...")
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        nb = {ex.submit(fetch_nav_backup, c): c for c in need_backup}
+        bf_ok = 0
+        for fut in as_completed(nb):
+            c = nb[fut]
+            b = fut.result()
+            if b:
+                results.setdefault(c, {})["navBackup"] = b
+                bf_ok += 1
+    print(f"  backfilled {bf_ok}/{len(need_backup)} NAVs")
+
     # Compute summary stats
     ok = sum(1 for v in results.values() if "error" not in v and v.get("apply"))
     paused = sum(1 for v in results.values() if v.get("apply") and "暂停" in v["apply"])
     limited = sum(1 for v in results.values() if v.get("limit") is not None and v["limit"] > 0)
     open_funds = sum(1 for v in results.values() if v.get("apply") and "开放" in v["apply"] and v.get("limit") is None)
     over_100 = sum(1 for v in results.values() if v.get("limit") is None or (v.get("limit") and v["limit"] >= 100))
+    nav_backups = sum(1 for v in results.values() if v.get("navBackup"))
 
     out = {
         "_meta": {
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": "fundf10.eastmoney.com (jjgg_*_3.html)",
+            "source": "fundf10.eastmoney.com (jjgg_*_3.html + f10/lsjz fallback)",
             "total": len(codes),
             "parsed": ok,
             "paused": paused,
             "limited": limited,
             "open": open_funds,
-            "eligible_arb": over_100,  # limit >= 100 or no limit (and apply contains 开放)
+            "eligible_arb": over_100,
+            "nav_backups": nav_backups,
         },
         "data": results,
     }
