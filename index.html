@@ -138,7 +138,7 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
 <div class="wrap">
 <div class="page-hd">
   <h1 class="page-title">LOF基金溢价套利</h1>
-  <p class="page-sub">实时溢价率监控 · 410只LOF基金 · 交易时段每60秒自动刷新 · 申购费按1折估算</p>
+  <p class="page-sub">实时溢价率监控 · 410只LOF基金（已剔除暂停申购）· 交易时段每60秒自动刷新 · 申购费按1折估算 · 限购数据每日刷新3次</p>
 </div>
 
 <!-- Status bar -->
@@ -641,8 +641,9 @@ const ALL_FUNDS = [
   {code:'501312',mkt:'sh',cat:'QDII',fee:1.5,limit:0,qdii:true,open:true,transfer:3}, // 华宝海外科技股票
 ];
 
-// Apply filter: open AND limit eligible
-const FUNDS = ALL_FUNDS.filter(f => f.open && (f.limit === 0 || f.limit >= 100));
+// FUNDS is populated dynamically after limits.json loads
+// Filter rule: apply status does NOT contain 暂停 AND (limit == null OR limit >= 100)
+let FUNDS = ALL_FUNDS;  // initial: all entries (will be filtered after fetchLimits)
 
 // ══════════════════════════════════════════════════════════
 // STATE
@@ -792,6 +793,35 @@ function fetchTiantian(code) {
   });
 }
 
+// Load latest limits.json (refreshed by GitHub Actions 3×/day on trading days)
+// Merges {apply, limit, redeem} into each ALL_FUNDS entry, then rebuilds FUNDS.
+async function fetchLimits() {
+  try {
+    const resp = await fetch('/data/limits.json?_=' + Date.now());
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const j = await resp.json();
+    state.limitsUpdated = j._meta && j._meta.updated;
+    const data = j.data || {};
+    ALL_FUNDS.forEach(f => {
+      const d = data[f.code];
+      if (!d || d.error) return;
+      f.applyStatus = d.apply || null;       // "开放申购" / "限大额" / "暂停申购"
+      f.limit = (typeof d.limit === 'number') ? d.limit : null;
+      f.redeemStatus = d.redeem || null;
+    });
+    // Rebuild visible FUNDS: exclude 暂停 status, exclude limit < 100
+    FUNDS = ALL_FUNDS.filter(f => {
+      if (f.applyStatus && f.applyStatus.indexOf('暂停') >= 0) return false;
+      if (f.limit !== null && f.limit !== undefined && f.limit < 100) return false;
+      return true;
+    });
+    return true;
+  } catch(e) {
+    console.warn('fetchLimits failed:', e.message);
+    return false;
+  }
+}
+
 async function fetchAllNAVs() {
   const results = await Promise.allSettled(FUNDS.map(f => fetchTiantian(f.code)));
   results.forEach((r, i) => {
@@ -939,11 +969,19 @@ function renderTable() {
       <td>${fmtPct(r.rtPrem)}</td>
       <td>${fmtPct(r.t1Prem)}</td>
       <td>${netCell(r.net, pClass(r.net))}</td>
-      <td>${r.limit === 0
-        ? `<span class="badge b-open" style="font-size:10px">不限</span>`
-        : r.limit >= 10000
-          ? `<span class="mono" style="color:var(--amb)">${(r.limit/10000).toFixed(0)}万</span>`
-          : `<span class="mono" style="color:var(--r)">${r.limit}元</span>`}</td>
+      <td>${(() => {
+        const isOpen = !r.applyStatus || r.applyStatus.indexOf('开放') >= 0;
+        const lim = r.limit;
+        if (isOpen && (lim === null || lim === undefined)) {
+          return `<span class="badge b-open" style="font-size:10px">不限</span>`;
+        }
+        if (lim === null || lim === undefined) {
+          return `<span class="mono" style="color:var(--td)">--</span>`;
+        }
+        const txt = lim >= 10000 ? `${(lim/10000).toFixed(lim%10000===0?0:2)}万` : `${lim}元`;
+        const color = lim >= 1000000 ? 'var(--g)' : lim >= 10000 ? 'var(--amb)' : 'var(--r)';
+        return `<span class="mono" style="color:${color}" title="${r.applyStatus||''}">${txt}</span>`;
+      })()}</td>
       <td>${fmtPrice(r.rtPrice)}</td>
       <td>
         ${fmtPrice(r.estNavComputed)}
@@ -957,7 +995,13 @@ function renderTable() {
       </td>
       <td>${feeLine}</td>
       <td class="mono">${r.transfer ? 'T+'+r.transfer : '--'}</td>
-      <td><span class="badge b-open">申购中</span></td>
+      <td>${(() => {
+        const s = r.applyStatus || '--';
+        if (s.indexOf('开放') >= 0) return `<span class="badge b-open">${s}</span>`;
+        if (s.indexOf('限') >= 0) return `<span class="badge" style="background:rgba(240,160,80,.12);color:var(--amb)">${s}</span>`;
+        if (s.indexOf('暂停') >= 0) return `<span class="badge" style="background:rgba(255,77,106,.12);color:var(--r)">${s}</span>`;
+        return `<span class="badge b-cls">${s}</span>`;
+      })()}</td>
     </tr>`;
   }).join('');
 }
@@ -1052,6 +1096,7 @@ document.querySelectorAll('.tip').forEach(t => t.addEventListener('click', e => 
 
 renderMktStatus();
 setInterval(renderMktStatus, 30000);
-doRefresh();
+// Fetch real limit data first (rebuilds FUNDS), then load quotes/NAVs
+fetchLimits().finally(() => doRefresh());
 </script>
 </body></html>

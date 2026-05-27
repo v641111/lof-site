@@ -1,0 +1,44 @@
+name: Update LOF Limits
+
+on:
+  schedule:
+    # Beijing time (UTC+8) → cron in UTC
+    - cron: '25 1 * * 1-5'   # 09:25 CST, Mon-Fri (open + after-market data refresh)
+    - cron: '30 7 * * 1-5'   # 15:30 CST, Mon-Fri (post-close)
+    - cron: '0 14 * * 1-5'   # 22:00 CST, Mon-Fri (after NAV publication)
+  workflow_dispatch:           # manual trigger from Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-limits
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run scraper
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/update_limits.py
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/limits.json
+          if git diff --quiet --staged; then
+            echo "No changes."
+          else
+            git commit -m "data: refresh LOF limits ($(date -u +%Y-%m-%dT%H:%MZ))"
+            git push
+          fi
