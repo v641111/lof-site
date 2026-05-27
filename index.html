@@ -138,7 +138,7 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
 <div class="wrap">
 <div class="page-hd">
   <h1 class="page-title">LOF基金溢价套利</h1>
-  <p class="page-sub">实时溢价率监控 · 410只LOF基金（已剔除暂停申购）· 交易时段每60秒自动刷新 · 申购费按1折估算 · 限购数据每日刷新3次</p>
+  <p class="page-sub">实时溢价率监控 · 410只LOF基金 · 暂停申购/限额<100元 的沉到底部 · 交易时段每60秒自动刷新 · 限购数据每日3次刷新</p>
 </div>
 
 <!-- Status bar -->
@@ -809,12 +809,8 @@ async function fetchLimits() {
       f.limit = (typeof d.limit === 'number') ? d.limit : null;
       f.redeemStatus = d.redeem || null;
     });
-    // Rebuild visible FUNDS: exclude 暂停 status, exclude limit < 100
-    FUNDS = ALL_FUNDS.filter(f => {
-      if (f.applyStatus && f.applyStatus.indexOf('暂停') >= 0) return false;
-      if (f.limit !== null && f.limit !== undefined && f.limit < 100) return false;
-      return true;
-    });
+    // 全部 410 只 LOF 都显示, 但暂停申购 / limit<100 的在排序时会沉到底
+    FUNDS = ALL_FUNDS;
     return true;
   } catch(e) {
     console.warn('fetchLimits failed:', e.message);
@@ -925,7 +921,15 @@ function renderTable() {
   const rows = FUNDS.map(f => calcRow(f));
   const sk = state.sortKey;
   const sd = state.sortDir;
+  // 不可买 (暂停申购 或 limit<100) 永远沉到底, 跟当前排序方向无关
+  const sinks = r => {
+    if (r.applyStatus && r.applyStatus.indexOf('暂停') >= 0) return true;
+    if (r.limit !== null && r.limit !== undefined && r.limit < 100) return true;
+    return false;
+  };
   rows.sort((a, b) => {
+    const sa = sinks(a), sb = sinks(b);
+    if (sa !== sb) return sa ? 1 : -1;
     let va = a[sk], vb = b[sk];
     if (typeof va === 'string') return sd * va.localeCompare(vb);
     if (va === null || va === undefined) va = sd === -1 ? -Infinity : Infinity;
