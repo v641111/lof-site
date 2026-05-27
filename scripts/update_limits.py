@@ -168,6 +168,72 @@ def fundgz_has_nav(code: str) -> bool:
         return False
 
 
+def fetch_kline_and_nav(code: str, mkt_hint: str | None = None) -> dict | None:
+    """Fetch (a) latest published NAV from Eastmoney f10/lsjz,
+    and (b) the LOF closing price on that NAV's date from Tencent K-line.
+
+    Returns: {dwjz, jzrq, navDateClose, prevDwjz, prevJzrq} or None.
+    """
+    import json as _j
+    # 1. Latest NAVs (most recent 5)
+    try:
+        url = f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=5"
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://fundf10.eastmoney.com/"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            j = _j.loads(resp.read().decode("utf-8", errors="replace"))
+        items = (j.get("Data") or {}).get("LSJZList") or []
+        if not items:
+            return None
+        latest = items[0]
+        dwjz = float(latest.get("DWJZ") or 0)
+        jzrq = latest.get("FSRQ")  # "YYYY-MM-DD"
+        prev = items[1] if len(items) > 1 else None
+        prevDwjz = float(prev.get("DWJZ") or 0) if prev else None
+        prevJzrq = prev.get("FSRQ") if prev else None
+    except Exception:
+        return None
+    if not dwjz or not jzrq:
+        return None
+
+    # 2. K-line close on jzrq date
+    nav_date_close = None
+    # Try both prefixes if mkt unknown
+    prefixes = [mkt_hint] if mkt_hint else ["sz", "sh"]
+    for pre in prefixes:
+        try:
+            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={pre}{code},day,,,15,qfq"
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+            kdata = _j.loads(text)
+            day_rows = ((kdata.get("data") or {}).get(f"{pre}{code}") or {}).get("qfqday") or []
+            if not day_rows:
+                continue
+            for row in day_rows:
+                # row: [date, open, close, high, low, ...]
+                if row[0] == jzrq:
+                    nav_date_close = float(row[2])
+                    break
+            # If exact date not found (rare), use the LAST close on/before jzrq
+            if nav_date_close is None:
+                for row in reversed(day_rows):
+                    if row[0] <= jzrq:
+                        nav_date_close = float(row[2])
+                        break
+            if nav_date_close:
+                break
+        except Exception:
+            continue
+
+    return {
+        "dwjz": dwjz,
+        "jzrq": jzrq,
+        "navDateClose": nav_date_close,
+        "prevDwjz": prevDwjz,
+        "prevJzrq": prevJzrq,
+    }
+
+
 def main():
     if not CODES_FILE.exists():
         print(f"ERROR: {CODES_FILE} not found", file=sys.stderr)
@@ -186,26 +252,25 @@ def main():
             if done % 50 == 0 or done == len(codes):
                 print(f"  progress: {done}/{len(codes)}")
 
-    # Backfill NAVs for funds where Tiantian fundgz has no data (mostly QDII)
-    print("\nChecking which funds need NAV backup...")
-    need_backup = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        check = {ex.submit(fundgz_has_nav, c): c for c in codes}
-        for fut in as_completed(check):
-            c = check[fut]
-            if not fut.result():
-                need_backup.append(c)
-    print(f"  {len(need_backup)} funds need NAV backup, fetching from f10/lsjz...")
+    # 对所有基金拉 (最新已公布净值 + K线收盘价) — 这是新的"自算"baseline
+    # 公式 estNav_今 = NAV_published × (rtPrice / closeOnNAVDate)
+    # 这种 close-on-NAV-date pair 是修复"24%虚高"问题的关键
+    print("\nFetching NAV + K-line for all funds (for accurate estNav)...")
     with ThreadPoolExecutor(max_workers=6) as ex:
-        nb = {ex.submit(fetch_nav_backup, c): c for c in need_backup}
-        bf_ok = 0
-        for fut in as_completed(nb):
-            c = nb[fut]
-            b = fut.result()
-            if b:
-                results.setdefault(c, {})["navBackup"] = b
-                bf_ok += 1
-    print(f"  backfilled {bf_ok}/{len(need_backup)} NAVs")
+        kn = {ex.submit(fetch_kline_and_nav, c): c for c in codes}
+        kn_ok = 0
+        for i, fut in enumerate(as_completed(kn)):
+            c = kn[fut]
+            r = fut.result()
+            if r:
+                results.setdefault(c, {})["nav"] = r
+                kn_ok += 1
+            if (i+1) % 50 == 0:
+                print(f"  nav progress: {i+1}/{len(codes)}")
+    print(f"  NAV+K-line ok: {kn_ok}/{len(codes)}")
+    # Bonus check: how many got navDateClose populated?
+    with_close = sum(1 for v in results.values() if v.get("nav") and v["nav"].get("navDateClose"))
+    print(f"  navDateClose available: {with_close}/{kn_ok}")
 
     # Compute summary stats
     ok = sum(1 for v in results.values() if "error" not in v and v.get("apply"))
@@ -213,19 +278,19 @@ def main():
     limited = sum(1 for v in results.values() if v.get("limit") is not None and v["limit"] > 0)
     open_funds = sum(1 for v in results.values() if v.get("apply") and "开放" in v["apply"] and v.get("limit") is None)
     over_100 = sum(1 for v in results.values() if v.get("limit") is None or (v.get("limit") and v["limit"] >= 100))
-    nav_backups = sum(1 for v in results.values() if v.get("navBackup"))
+    nav_complete = sum(1 for v in results.values() if v.get("nav") and v["nav"].get("dwjz") and v["nav"].get("navDateClose"))
 
     out = {
         "_meta": {
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": "fundf10.eastmoney.com (jjgg_*_3.html + f10/lsjz fallback)",
+            "source": "fundf10.eastmoney.com (jjgg/lsjz) + qt.gtimg.cn (kline)",
             "total": len(codes),
             "parsed": ok,
             "paused": paused,
             "limited": limited,
             "open": open_funds,
             "eligible_arb": over_100,
-            "nav_backups": nav_backups,
+            "nav_complete": nav_complete,
         },
         "data": results,
     }
