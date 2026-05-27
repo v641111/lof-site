@@ -58,6 +58,11 @@ th{background:var(--card);color:var(--td);font-weight:600;text-transform:upperca
 th:hover{color:var(--t)}th.srt{color:var(--g)}
 .sarr{margin-left:3px;font-size:9px;opacity:.5}
 th.srt .sarr{opacity:1}
+.tip{display:inline-block;margin-left:4px;font-size:11px;color:var(--td);cursor:help;opacity:.6;transition:opacity .15s;position:relative;font-family:'DM Sans',sans-serif;font-weight:400}
+.tip:hover{opacity:1;color:var(--g)}
+.tip::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--bdr);color:var(--t);font-size:11px;font-weight:400;line-height:1.55;letter-spacing:0;text-transform:none;padding:10px 13px;border-radius:8px;white-space:pre-line;width:max-content;max-width:300px;text-align:left;opacity:0;pointer-events:none;transition:opacity .15s;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.tip::before{content:'';position:absolute;bottom:calc(100% + 2px);left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--bdr);opacity:0;transition:opacity .15s;z-index:201}
+.tip:hover::after,.tip:hover::before{opacity:1}
 td{padding:12px 14px;border-bottom:1px solid rgba(22,29,42,.7);white-space:nowrap}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(13,17,23,.6)}
@@ -158,14 +163,14 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
 <div class="tw"><table id="lofTbl">
   <thead><tr>
     <th onclick="sortBy('name')">基金<span class="sarr">↕</span></th>
-    <th onclick="sortBy('rt')" id="th_rt" class="srt">实时溢价率<span class="sarr" id="sa_rt">↓</span></th>
-    <th onclick="sortBy('t1')" id="th_t1">T-1溢价率<span class="sarr" id="sa_t1">↕</span></th>
-    <th onclick="sortBy('net')" id="th_net">套利净空间<span class="sarr" id="sa_net">↕</span></th>
-    <th onclick="sortBy('price')" id="th_price">实时场内价<span class="sarr" id="sa_price">↕</span></th>
-    <th onclick="sortBy('estnav')" id="th_estnav">估算净值<span class="sarr" id="sa_estnav">↕</span></th>
-    <th onclick="sortBy('t1nav')" id="th_t1nav">T-1净值<span class="sarr" id="sa_t1nav">↕</span></th>
-    <th>申购费率</th>
-    <th>转托管</th>
+    <th onclick="sortBy('rt')" id="th_rt" class="srt">盘中估算溢价率<span class="tip" data-tip="公式：最新成交价 ÷ 天天基金估算净值 − 1&#10;&#10;盘中9:30-15:00时段每15分钟更新一次估算净值，相对真实。&#10;盘后（15:00之后）估算净值冻结至次日开盘，QDII基金尤其容易失真。&#10;&#10;此数据偏向【实时但有偏差】。">ⓘ</span><span class="sarr" id="sa_rt">↓</span></th>
+    <th onclick="sortBy('t1')" id="th_t1">上一交易日溢价率<span class="tip" data-tip="公式：最新成交价 ÷ 最近一次公布净值 − 1&#10;&#10;基金公司每日18-22点公布当日真实净值。&#10;• 公布后：分子分母同属一个交易日，结果货真价实&#10;• 公布前（15:00-22:00）：分母仍是前一日净值，会高估溢价&#10;&#10;此数据偏向【准确但滞后】。">ⓘ</span><span class="sarr" id="sa_t1">↕</span></th>
+    <th onclick="sortBy('net')" id="th_net">套利净空间<span class="tip" data-tip="公式：盘中估算溢价率 − 申购费率(1折)&#10;&#10;扣除0.15%申购成本后的净收益估算。&#10;实际套利还需考虑：&#10;• 转托管期间(3-7天)的价格波动&#10;• T日真实净值与估算的偏差">ⓘ</span><span class="sarr" id="sa_net">↕</span></th>
+    <th onclick="sortBy('price')" id="th_price">最新成交价<span class="tip" data-tip="腾讯行情接口的"现价"字段&#10;&#10;盘中：实时撮合价&#10;盘后：当日收盘价，冻结至次日开盘&#10;A股无盘前交易">ⓘ</span><span class="sarr" id="sa_price">↕</span></th>
+    <th onclick="sortBy('estnav')" id="th_estnav">估算净值<span class="tip" data-tip="天天基金根据基金最近季报披露的持仓 + 持仓股票实时价 估算&#10;&#10;• 每15分钟刷新一次&#10;• 季报持仓滞后，估算与实际有偏差&#10;• QDII的估算时间为次日凌晨（跟踪美股隔夜）">ⓘ</span><span class="sarr" id="sa_estnav">↕</span></th>
+    <th onclick="sortBy('t1nav')" id="th_t1nav">最新公布净值<span class="tip" data-tip="基金公司官方公布的单位净值，每日收盘后18-22点更新&#10;&#10;括号内日期表示该净值对应的交易日">ⓘ</span><span class="sarr" id="sa_t1nav">↕</span></th>
+    <th>申购费率<span class="tip" data-tip="原费率与1折后费率（基金销售平台普遍提供1折优惠）">ⓘ</span></th>
+    <th>转托管<span class="tip" data-tip="场外申购份额转至场内交易所所需的工作日数&#10;&#10;一般QDII为T+5，A股LOF为T+7&#10;实际以基金公司公告为准">ⓘ</span></th>
     <th>状态</th>
   </tr></thead>
   <tbody id="tbody">
@@ -808,8 +813,11 @@ async function fetchAllNAVs() {
 function calcRow(fund) {
   const d = state.data[fund.code] || {};
   const effectiveFee = fund.fee * state.discount;
-  const rtPrem  = (d.estNav  > 0 && d.rtPrice   > 0) ? (d.rtPrice   / d.estNav  - 1) * 100 : null;
-  const t1Prem  = (d.t1Nav   > 0 && d.prevClose > 0) ? (d.prevClose / d.t1Nav   - 1) * 100 : null;
+  // 盘中估算溢价率 = 最新成交价 / 天天基金估算净值 - 1
+  const rtPrem  = (d.estNav > 0 && d.rtPrice > 0) ? (d.rtPrice / d.estNav - 1) * 100 : null;
+  // 上一交易日溢价率 = 最新成交价 / 最近一次公布净值 - 1
+  // 用"现价"而非"昨收"：盘后"昨收"仍是前一日的价，"现价"才是最近交易日收盘价
+  const t1Prem  = (d.t1Nav  > 0 && d.rtPrice > 0) ? (d.rtPrice / d.t1Nav  - 1) * 100 : null;
   const net     = rtPrem !== null ? rtPrem - effectiveFee : null;
   return {
     ...fund, ...d,
@@ -1009,6 +1017,9 @@ async function doRefresh() {
 // ══════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════
+// Prevent tooltip icon clicks from triggering column sort
+document.querySelectorAll('.tip').forEach(t => t.addEventListener('click', e => e.stopPropagation()));
+
 renderMktStatus();
 setInterval(renderMktStatus, 30000);
 doRefresh();
