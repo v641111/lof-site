@@ -166,6 +166,7 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
     <th onclick="sortBy('rt')" id="th_rt" class="srt">盘中估算溢价率<span class="tip" data-tip="公式：最新成交价 ÷ 天天基金估算净值 − 1&#10;&#10;盘中9:30-15:00时段每15分钟更新一次估算净值，相对真实。&#10;盘后（15:00之后）估算净值冻结至次日开盘，QDII基金尤其容易失真。&#10;&#10;此数据偏向【实时但有偏差】。">ⓘ</span><span class="sarr" id="sa_rt">↓</span></th>
     <th onclick="sortBy('t1')" id="th_t1">上一交易日溢价率<span class="tip" data-tip="公式：最新成交价 ÷ 最近一次公布净值 − 1&#10;&#10;基金公司每日18-22点公布当日真实净值。&#10;• 公布后：分子分母同属一个交易日，结果货真价实&#10;• 公布前（15:00-22:00）：分母仍是前一日净值，会高估溢价&#10;&#10;此数据偏向【准确但滞后】。">ⓘ</span><span class="sarr" id="sa_t1">↕</span></th>
     <th onclick="sortBy('net')" id="th_net">套利净空间<span class="tip" data-tip="公式：盘中估算溢价率 − 申购费率(1折)&#10;&#10;扣除0.15%申购成本后的净收益估算。&#10;实际套利还需考虑：&#10;• 转托管期间(约3天)的价格波动&#10;• T日真实净值与估算的偏差">ⓘ</span><span class="sarr" id="sa_net">↕</span></th>
+    <th onclick="sortBy('limit')" id="th_limit">日限额<span class="tip" data-tip="单日单户申购上限&#10;&#10;数据需逐基金维护，目前为静态默认值：&#10;• 不限：可大额申购&#10;• 限购N元：单日上限N元&#10;• 暂停申购：当日无法申购&#10;&#10;具体以基金公司公告为准，建议申购前到天天基金确认。">ⓘ</span><span class="sarr" id="sa_limit">↕</span></th>
     <th onclick="sortBy('price')" id="th_price">最新成交价<span class="tip" data-tip="腾讯行情接口的"现价"字段&#10;&#10;盘中：实时撮合价&#10;盘后：当日收盘价，冻结至次日开盘&#10;A股无盘前交易">ⓘ</span><span class="sarr" id="sa_price">↕</span></th>
     <th onclick="sortBy('estnav')" id="th_estnav">估算净值<span class="tip" data-tip="天天基金根据基金最近季报披露的持仓 + 持仓股票实时价 估算&#10;&#10;• 每15分钟刷新一次&#10;• 季报持仓滞后，估算与实际有偏差&#10;• QDII的估算时间为次日凌晨（跟踪美股隔夜）">ⓘ</span><span class="sarr" id="sa_estnav">↕</span></th>
     <th onclick="sortBy('t1nav')" id="th_t1nav">最新公布净值<span class="tip" data-tip="基金公司官方公布的单位净值，每日收盘后18-22点更新&#10;&#10;括号内日期表示该净值对应的交易日">ⓘ</span><span class="sarr" id="sa_t1nav">↕</span></th>
@@ -174,7 +175,7 @@ footer{border-top:1px solid var(--bdr);padding:30px 20px 22px;background:var(--b
     <th>状态</th>
   </tr></thead>
   <tbody id="tbody">
-    <tr class="load-row"><td colspan="10"><span class="lspin"></span>正在加载行情数据…</td></tr>
+    <tr class="load-row"><td colspan="11"><span class="lspin"></span>正在加载行情数据…</td></tr>
   </tbody>
 </table></div>
 
@@ -810,21 +811,44 @@ async function fetchAllNAVs() {
 // ══════════════════════════════════════════════════════════
 // CALCULATION
 // ══════════════════════════════════════════════════════════
+// 判断 Tiantian dwjz 是否滞后 (净值日期未跟上最近一个交易日)
+function isNavStale(jzrq) {
+  if (!jzrq) return false;
+  const navDate = new Date(jzrq.replace(/-/g,'/'));
+  if (isNaN(navDate)) return false;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const dow = today.getDay();
+  let lastTradeDay = new Date(today);
+  if (dow === 0) lastTradeDay.setDate(today.getDate() - 2);
+  else if (dow === 6) lastTradeDay.setDate(today.getDate() - 1);
+  else if (dow === 1 && new Date().getHours() < 9) lastTradeDay.setDate(today.getDate() - 3);
+  else lastTradeDay.setDate(today.getDate() - 1);
+  const ageDays = Math.round((lastTradeDay - navDate) / 86400000);
+  return ageDays >= 2;
+}
+
 function calcRow(fund) {
   const d = state.data[fund.code] || {};
   const effectiveFee = fund.fee * state.discount;
-  // 盘中估算溢价率 = 最新成交价 / 天天基金估算净值 - 1
-  const rtPrem  = (d.estNav > 0 && d.rtPrice > 0) ? (d.rtPrice / d.estNav - 1) * 100 : null;
-  // 上一交易日溢价率 = 最新成交价 / 最近一次公布净值 - 1
-  // 用"现价"而非"昨收"：盘后"昨收"仍是前一日的价，"现价"才是最近交易日收盘价
-  const t1Prem  = (d.t1Nav  > 0 && d.rtPrice > 0) ? (d.rtPrice / d.t1Nav  - 1) * 100 : null;
-  const net     = rtPrem !== null ? rtPrem - effectiveFee : null;
+  const navStale = isNavStale(d.t1Date);
+
+  // 估算净值: 滞后时改用自算 dwjz × (rtPrice / prevClose)
+  let estNav = d.estNav;
+  let estSource = 'api';
+  if (navStale && d.t1Nav > 0 && d.rtPrice > 0 && d.prevClose > 0) {
+    estNav = d.t1Nav * (d.rtPrice / d.prevClose);
+    estSource = 'calc';
+  }
+
+  const rtPrem = (estNav > 0 && d.rtPrice > 0) ? (d.rtPrice / estNav - 1) * 100 : null;
+  const t1Prem = (d.t1Nav > 0 && d.rtPrice > 0) ? (d.rtPrice / d.t1Nav - 1) * 100 : null;
+  const net    = rtPrem !== null ? rtPrem - effectiveFee : null;
+
   return {
     ...fund, ...d,
-    rtPrem, t1Prem, net, effectiveFee,
-    // sortable by numeric key name
+    rtPrem, t1Prem, net, effectiveFee, navStale, estNavComputed: estNav, estSource,
     rt: rtPrem, t1: t1Prem, price: d.rtPrice||0,
-    estnav: d.estNav||0, t1nav: d.t1Nav||0,
+    estnav: estNav||0, t1nav: d.t1Nav||0, limit: fund.limit||0,
     name: d.name || fund.code,
   };
 }
@@ -881,28 +905,14 @@ function renderTable() {
 
   const tbody = document.getElementById('tbody');
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr class="load-row"><td colspan="10">无符合条件的基金</td></tr>';
+    tbody.innerHTML = '<tr class="load-row"><td colspan="11">无符合条件的基金</td></tr>';
     return;
   }
 
   tbody.innerHTML = rows.map(r => {
-    const lim = r.limit === 0 ? '不限' : r.limit >= 10000 ? (r.limit/10000)+'万' : r.limit+'元';
-    const feeLine = `${r.fee}% <span class="fee-detail" style="color:var(--amb)">→ ${r.effectiveFee.toFixed(2)}%</span>`;
+        const feeLine = `${r.fee}% <span class="fee-detail" style="color:var(--amb)">→ ${r.effectiveFee.toFixed(2)}%</span>`;
 
-    // 判断已公布净值是否滞后（jzrq 应是最近一个交易日）
-    let navStale = false;
-    if (r.t1Date) {
-      const navDate = new Date(r.t1Date.replace(/-/g,'/'));
-      const today = new Date(); today.setHours(0,0,0,0);
-      const dow = today.getDay();
-      let lastTradeDay = new Date(today);
-      if (dow === 0) lastTradeDay.setDate(today.getDate() - 2);
-      else if (dow === 6) lastTradeDay.setDate(today.getDate() - 1);
-      else if (dow === 1 && new Date().getHours() < 9) lastTradeDay.setDate(today.getDate() - 3);
-      else lastTradeDay.setDate(today.getDate() - 1);
-      const ageDays = Math.round((lastTradeDay - navDate) / 86400000);
-      navStale = ageDays >= 2;
-    }
+    const navStale = r.navStale;
     // QDII的gztime可能是次日凌晨（跟踪美股隔夜），不强行判stale
     let stale = false;
     if (r.estTime && r.estTime.length >= 10) {
@@ -923,16 +933,23 @@ function renderTable() {
           <a href="https://fund.eastmoney.com/${r.code}.html" target="_blank" rel="noopener" class="tk">${r.code}</a>
           ${r.qdii ? '<span class="badge b-qdii">QDII</span>' : ''}
           <span class="badge b-open">可申购</span>
-          <span style="font-size:10px;color:var(--td)">日限${lim}</span>
+          
         </div>
       </td>
       <td>${fmtPct(r.rtPrem)}</td>
       <td>${fmtPct(r.t1Prem)}</td>
       <td>${netCell(r.net, pClass(r.net))}</td>
+      <td>${r.limit === 0
+        ? `<span class="badge b-open" style="font-size:10px">不限</span>`
+        : r.limit >= 10000
+          ? `<span class="mono" style="color:var(--amb)">${(r.limit/10000).toFixed(0)}万</span>`
+          : `<span class="mono" style="color:var(--r)">${r.limit}元</span>`}</td>
       <td>${fmtPrice(r.rtPrice)}</td>
       <td>
-        ${fmtPrice(r.estNav)}
-        ${estTimeDisp}
+        ${fmtPrice(r.estNavComputed)}
+        ${r.estSource === 'calc'
+          ? `<div style="font-size:10px;color:var(--amb)">⟲ 自算 (基于 ${r.t1Date})</div>`
+          : estTimeDisp}
       </td>
       <td>
         ${fmtPrice(r.t1Nav)}
@@ -948,7 +965,7 @@ function renderTable() {
 // ══════════════════════════════════════════════════════════
 // SORT
 // ══════════════════════════════════════════════════════════
-const SORT_COLS = ['rt','t1','net','price','estnav','t1nav'];
+const SORT_COLS = ['rt','t1','net','limit','price','estnav','t1nav'];
 
 function sortBy(key) {
   if (state.sortKey === key) state.sortDir *= -1;
@@ -999,7 +1016,7 @@ async function doRefresh() {
   // First load: show spinner
   if (Object.keys(state.data).length === 0) {
     document.getElementById('tbody').innerHTML =
-      '<tr class="load-row"><td colspan="10"><span class="lspin"></span>正在加载数据…</td></tr>';
+      '<tr class="load-row"><td colspan="11"><span class="lspin"></span>正在加载数据…</td></tr>';
   }
 
   const [sinaOk] = await Promise.all([fetchPrices(), fetchAllNAVs()]);
