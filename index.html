@@ -370,21 +370,38 @@ async function fetchSinaFallback(sym) {
   }
 }
 
-// Tiantian Fund: JSONP estimated NAV per fund
+// Tiantian Fund JSONP: API hardcodes callback name to "jsonpgz" — custom
+// callback param is ignored. We register ONE global jsonpgz that routes
+// responses to per-fund resolvers via the fundcode field in the payload.
+const _ttPending = {};  // fundcode -> {resolve, timer}
+window.jsonpgz = function(data) {
+  if (!data || !data.fundcode) return;  // empty payload (e.g. jsonpgz();)
+  const p = _ttPending[data.fundcode];
+  if (p) { clearTimeout(p.timer); p.resolve(data); delete _ttPending[data.fundcode]; }
+};
+
 function fetchTiantian(code) {
   return new Promise(resolve => {
-    const cb = `_lof_${code}_${Date.now()}`;
-    let done = false;
-    const timer = setTimeout(() => { if(!done){done=true;resolve(null);} delete window[cb]; }, 7000);
-    window[cb] = data => {
-      if (!done) { done=true; clearTimeout(timer); resolve(data); }
-      delete window[cb];
-    };
+    // If a previous attempt is still pending for this code, time it out first
+    if (_ttPending[code]) { clearTimeout(_ttPending[code].timer); _ttPending[code].resolve(null); }
+    const timer = setTimeout(() => {
+      if (_ttPending[code]) { _ttPending[code].resolve(null); delete _ttPending[code]; }
+    }, 8000);
+    _ttPending[code] = {resolve, timer};
     const s = document.createElement('script');
-    s.src = `https://fundgz.1234567.com.cn/js/${code}.js?callback=${cb}&_=${Date.now()}`;
-    s.onerror = () => { if(!done){done=true;clearTimeout(timer);resolve(null);} };
+    s.src = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`;
+    s.onerror = () => {
+      if (_ttPending[code]) { clearTimeout(timer); _ttPending[code].resolve(null); delete _ttPending[code]; }
+    };
+    s.onload = () => {
+      // If onload fires but jsonpgz wasn't called with our fundcode (empty payload),
+      // resolve null shortly after to free the slot.
+      setTimeout(() => {
+        if (_ttPending[code]) { clearTimeout(timer); _ttPending[code].resolve(null); delete _ttPending[code]; }
+      }, 100);
+    };
     document.head.appendChild(s);
-    setTimeout(() => { try{document.head.removeChild(s);}catch(e){} }, 8000);
+    setTimeout(() => { try { document.head.removeChild(s); } catch(e){} }, 9000);
   });
 }
 
